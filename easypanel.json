@@ -1,0 +1,39 @@
+{
+  "$schema": "https://easypanel.io/schema.json",
+  "name": "linkcomigo-scraper",
+  "services": {
+    "scraper": {
+      "type": "app",
+      "data": {
+        "projectName": "linkcomigo-scraper",
+        "serviceName": "scraper",
+        "source": {
+          "type": "github",
+          "owner": "SEU_USUARIO",
+          "repo": "linkcomigo-scraper",
+          "ref": "main",
+          "path": "/"
+        },
+        "build": {
+          "type": "dockerfile",
+          "file": "Dockerfile"
+        },
+        "env": "PORT=3001\nSCRAPER_API_KEY=TROQUE_POR_UMA_CHAVE_SEGURA\nNODE_ENV=production",
+        "deploy": {
+          "replicas": 1,
+          "resources": {
+            "memoryLimit": "4096",
+            "memoryReservation": "1024"
+          }
+        },
+        "domains": [
+          {
+            "host": "$(EASYPANEL_DOMAIN)",
+            "port": 3001
+          }
+        ],
+        "mounts": []
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  scraper:
+    build: .
+    container_name: linkcomigo-scraper
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - SCRAPER_API_KEY=linkcomigo-scraper-secret-2026
+      - NODE_ENV=production
+    # Recursos para Playwright
+    shm_size: '2gb'
+    # Segurança para Chromium
+    security_opt:
+      - seccomp:unconfined
+    # Limite de recursos
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
