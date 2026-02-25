@@ -58,12 +58,20 @@ app.post('/scrape', authMiddleware, async (req, res) => {
         page.setDefaultTimeout(30000);
 
         await page.goto(url, {
-            waitUntil: 'domcontentloaded',
+            waitUntil: 'networkidle',
             timeout: 30000
         });
 
-        // Aguardar o conteúdo carregar (SPAs como AliExpress)
-        await page.waitForTimeout(3000);
+        // Aguardar o conteúdo carregar (SPAs como AliExpress precisam de mais tempo)
+        await page.waitForTimeout(5000);
+
+        // Scroll para forçar lazy loading de imagens
+        await page.evaluate(() => window.scrollTo(0, 300));
+        await page.waitForTimeout(1000);
+
+        // Debug: log do título da página
+        const pageTitle = await page.title();
+        console.log(`[SCRAPER] Page title: ${pageTitle}`);
 
         // Extrair metadados
         const metadata = await page.evaluate(() => {
@@ -75,31 +83,74 @@ app.post('/scrape', authMiddleware, async (req, res) => {
             // Tentar pegar título do produto
             let title = getMeta('og:title') || getMeta('twitter:title') || document.title || '';
 
-            // AliExpress específico: tentar seletores do produto
-            const aliTitle = document.querySelector('[data-pl="product-title"]')?.textContent
-                || document.querySelector('.product-title-text')?.textContent
-                || document.querySelector('h1')?.textContent;
+            // AliExpress específico: tentar múltiplos seletores do produto
+            const titleSelectors = [
+                '[data-pl="product-title"]',
+                '.product-title-text',
+                '.title--wrap--UUHae_g h1',
+                '.pdp-info h1',
+                '[class*="ProductTitle"] h1',
+                '[class*="product-title"]',
+                'h1[class*="title"]',
+                'h1'
+            ];
 
-            if (aliTitle) title = aliTitle.trim();
+            for (const sel of titleSelectors) {
+                const el = document.querySelector(sel);
+                if (el?.textContent && el.textContent.trim().length > 5) {
+                    const text = el.textContent.trim();
+                    // Ignorar títulos genéricos
+                    if (!text.includes('AliExpress') || text.length > 30) {
+                        title = text;
+                        break;
+                    }
+                }
+            }
 
             // Imagem
             let image = getMeta('og:image') || getMeta('twitter:image') || '';
 
-            // AliExpress específico: imagem do produto
-            const aliImage = document.querySelector('.magnifier-image img')?.src
-                || document.querySelector('[data-pl="product-image"] img')?.src
-                || document.querySelector('.image-view-item img')?.src;
+            // AliExpress específico: múltiplos seletores de imagem
+            const imageSelectors = [
+                '.magnifier-image img',
+                '[data-pl="product-image"] img',
+                '.image-view-item img',
+                '.slider--img--K7bnXf3 img',
+                '.pdp-info img',
+                '[class*="Gallery"] img',
+                '[class*="slider"] img',
+                '.image-container img'
+            ];
 
-            if (aliImage) image = aliImage;
+            for (const sel of imageSelectors) {
+                const el = document.querySelector(sel);
+                if (el?.src && el.src.startsWith('http') && !el.src.includes('favicon')) {
+                    image = el.src;
+                    break;
+                }
+            }
 
             // Descrição
             let description = getMeta('og:description') || getMeta('description') || '';
 
-            // Preço (AliExpress)
-            const priceEl = document.querySelector('[data-pl="product-price"]')
-                || document.querySelector('.product-price-value')
-                || document.querySelector('.uniform-banner-box-price');
-            const price = priceEl?.textContent?.trim() || '';
+            // Preço (AliExpress) - múltiplos seletores
+            const priceSelectors = [
+                '[data-pl="product-price"]',
+                '.product-price-value',
+                '.uniform-banner-box-price',
+                '[class*="Price"] span',
+                '.es--wrap--erdmPRe',
+                '[class*="price"]'
+            ];
+
+            let price = '';
+            for (const sel of priceSelectors) {
+                const el = document.querySelector(sel);
+                if (el?.textContent && /[\d,.]/.test(el.textContent)) {
+                    price = el.textContent.trim();
+                    break;
+                }
+            }
 
             return {
                 title: title.trim(),
