@@ -1,6 +1,10 @@
 const express = require('express');
 const cors = require('cors');
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-extra');
+const stealth = require('puppeteer-extra-plugin-stealth')();
+
+// Aplicar stealth plugin
+chromium.use(stealth);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -9,7 +13,7 @@ const API_KEY = process.env.SCRAPER_API_KEY || 'linkcomigo-scraper-secret-2026';
 app.use(cors());
 app.use(express.json());
 
-// Middleware de autenticação
+// Middleware de autenticacao
 function authMiddleware(req, res, next) {
     const authHeader = req.headers.authorization;
     if (!authHeader || authHeader !== `Bearer ${API_KEY}`) {
@@ -22,6 +26,65 @@ function authMiddleware(req, res, next) {
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Funcao para criar browser com stealth
+async function createStealthBrowser() {
+    return await chromium.launch({
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--disable-background-timer-throttling',
+            '--disable-renderer-backgrounding',
+            '--disable-blink-features=AutomationControlled',
+            '--window-size=1920,1080'
+        ]
+    });
+}
+
+// Funcao para criar contexto com headers realistas
+async function createStealthContext(browser) {
+    const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+        viewport: { width: 1920, height: 1080 },
+        locale: 'pt-BR',
+        timezoneId: 'America/Sao_Paulo',
+        geolocation: { latitude: -23.5505, longitude: -46.6333 },
+        permissions: ['geolocation']
+    });
+
+    return context;
+}
+
+// Funcao para simular comportamento humano
+async function simulateHumanBehavior(page) {
+    // Delay aleatorio inicial (1-3s)
+    await page.waitForTimeout(Math.random() * 2000 + 1000);
+
+    // Movimentos de mouse aleatorios
+    await page.mouse.move(Math.random() * 800 + 200, Math.random() * 600 + 100, { steps: 10 });
+    await page.waitForTimeout(300);
+    await page.mouse.move(Math.random() * 800 + 200, Math.random() * 600 + 100, { steps: 10 });
+
+    // Rolagem humana (scroll suave)
+    await page.evaluate(() => {
+        window.scrollBy({ top: window.innerHeight * 0.3, behavior: 'smooth' });
+    });
+    await page.waitForTimeout(800);
+
+    // Mais um movimento de mouse
+    await page.mouse.move(Math.random() * 800 + 200, Math.random() * 600 + 200, { steps: 10 });
+
+    // Mais scroll
+    await page.evaluate(() => {
+        window.scrollBy({ top: window.innerHeight * 0.2, behavior: 'smooth' });
+    });
+    await page.waitForTimeout(500);
+}
 
 // Endpoint principal de scraping
 app.post('/scrape', authMiddleware, async (req, res) => {
@@ -36,48 +99,29 @@ app.post('/scrape', authMiddleware, async (req, res) => {
     let browser = null;
 
     try {
-        // Usar channel 'chrome' para melhor compatibilidade anti-bot
-        browser = await chromium.launch({
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-infobars',
-                '--window-size=1920,1080'
-            ]
-        });
-
-        const context = await browser.newContext({
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            viewport: { width: 1920, height: 1080 },
-            locale: 'pt-BR',
-            timezoneId: 'America/Sao_Paulo',
-            geolocation: { latitude: -23.5505, longitude: -46.6333 },
-            permissions: ['geolocation']
-        });
-
+        browser = await createStealthBrowser();
+        const context = await createStealthContext(browser);
         const page = await context.newPage();
 
-        // Mascarar detecção de webdriver/automation
-        await page.addInitScript(() => {
-            // Remover propriedades que denunciam automação
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+        // Headers extras pra parecer real
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
+        });
 
-            // Simular chrome runtime
-            window.chrome = { runtime: {} };
-
-            // Override permissions query
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
+        // Bloquear recursos desnecessarios (economiza tempo)
+        await page.route('**/*', route => {
+            const type = route.request().resourceType();
+            if (['stylesheet', 'font', 'media'].includes(type)) {
+                return route.abort();
+            }
+            return route.continue();
         });
 
         // Timeout de 30 segundos
@@ -88,14 +132,16 @@ app.post('/scrape', authMiddleware, async (req, res) => {
             timeout: 30000
         });
 
-        // Aguardar o conteúdo carregar (SPAs como AliExpress precisam de mais tempo)
-        await page.waitForTimeout(8000);
+        // Aguardar carregamento inicial
+        await page.waitForTimeout(3000);
 
-        // Scroll para forçar lazy loading de imagens
-        await page.evaluate(() => window.scrollTo(0, 500));
+        // Simular comportamento humano
+        await simulateHumanBehavior(page);
+
+        // Aguardar mais um pouco para SPA carregar
         await page.waitForTimeout(2000);
 
-        // Debug: log do título da página e URL final
+        // Debug: log do titulo da pagina e URL final
         const pageTitle = await page.title();
         const finalUrl = page.url();
         console.log(`[SCRAPER] Page title: ${pageTitle}`);
@@ -108,10 +154,10 @@ app.post('/scrape', authMiddleware, async (req, res) => {
                 return el?.content || '';
             };
 
-            // Tentar pegar título do produto
+            // Tentar pegar titulo do produto
             let title = getMeta('og:title') || getMeta('twitter:title') || document.title || '';
 
-            // AliExpress específico: tentar múltiplos seletores do produto
+            // AliExpress especifico: tentar multiplos seletores do produto
             const titleSelectors = [
                 '[data-pl="product-title"]',
                 '.product-title-text',
@@ -127,7 +173,6 @@ app.post('/scrape', authMiddleware, async (req, res) => {
                 const el = document.querySelector(sel);
                 if (el?.textContent && el.textContent.trim().length > 5) {
                     const text = el.textContent.trim();
-                    // Ignorar títulos genéricos
                     if (!text.includes('AliExpress') || text.length > 30) {
                         title = text;
                         break;
@@ -138,7 +183,7 @@ app.post('/scrape', authMiddleware, async (req, res) => {
             // Imagem
             let image = getMeta('og:image') || getMeta('twitter:image') || '';
 
-            // AliExpress específico: múltiplos seletores de imagem
+            // AliExpress especifico: multiplos seletores de imagem
             const imageSelectors = [
                 '.magnifier-image img',
                 '[data-pl="product-image"] img',
@@ -147,21 +192,22 @@ app.post('/scrape', authMiddleware, async (req, res) => {
                 '.pdp-info img',
                 '[class*="Gallery"] img',
                 '[class*="slider"] img',
-                '.image-container img'
+                '.image-container img',
+                'img[src*="alicdn"]'
             ];
 
             for (const sel of imageSelectors) {
                 const el = document.querySelector(sel);
-                if (el?.src && el.src.startsWith('http') && !el.src.includes('favicon')) {
+                if (el?.src && el.src.startsWith('http') && !el.src.includes('favicon') && el.src.includes('alicdn')) {
                     image = el.src;
                     break;
                 }
             }
 
-            // Descrição
+            // Descricao
             let description = getMeta('og:description') || getMeta('description') || '';
 
-            // Preço (AliExpress) - múltiplos seletores
+            // Preco (AliExpress) - multiplos seletores
             const priceSelectors = [
                 '[data-pl="product-price"]',
                 '.product-price-value',
@@ -226,32 +272,19 @@ app.post('/debug', authMiddleware, async (req, res) => {
     let browser = null;
 
     try {
-        browser = await chromium.launch({
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--disable-blink-features=AutomationControlled'
-            ]
-        });
-
-        const context = await browser.newContext({
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            viewport: { width: 1920, height: 1080 },
-            locale: 'pt-BR'
-        });
-
+        browser = await createStealthBrowser();
+        const context = await createStealthContext(browser);
         const page = await context.newPage();
 
-        await page.addInitScript(() => {
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            window.chrome = { runtime: {} };
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Upgrade-Insecure-Requests': '1'
         });
 
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForTimeout(5000);
+        await page.waitForTimeout(3000);
+        await simulateHumanBehavior(page);
 
         // Capturar screenshot
         const screenshot = await page.screenshot({ type: 'png', fullPage: false });
@@ -267,7 +300,7 @@ app.post('/debug', authMiddleware, async (req, res) => {
                 pageTitle,
                 finalUrl,
                 htmlLength: html.length,
-                htmlPreview: html.substring(0, 2000),
+                htmlPreview: html.substring(0, 3000),
                 screenshot: screenshot.toString('base64')
             }
         });
@@ -282,7 +315,7 @@ app.post('/debug', authMiddleware, async (req, res) => {
 app.get('/test', authMiddleware, async (req, res) => {
     const testUrl = 'https://www.aliexpress.com/item/1005006123456789.html';
     res.json({
-        message: 'Scraper is working',
+        message: 'Scraper is working with stealth mode',
         testUrl,
         usage: {
             method: 'POST',
@@ -294,6 +327,6 @@ app.get('/test', authMiddleware, async (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[SCRAPER] Running on port ${PORT}`);
+    console.log(`[SCRAPER] Running on port ${PORT} with stealth mode`);
     console.log(`[SCRAPER] Health check: http://localhost:${PORT}/health`);
 });
