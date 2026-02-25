@@ -213,6 +213,71 @@ app.post('/scrape', authMiddleware, async (req, res) => {
     }
 });
 
+// Endpoint de debug - captura screenshot (com auth)
+app.post('/debug', authMiddleware, async (req, res) => {
+    const { url } = req.body;
+
+    if (!url) {
+        return res.status(400).json({ error: 'URL is required' });
+    }
+
+    console.log(`[DEBUG] Capturing: ${url}`);
+
+    let browser = null;
+
+    try {
+        browser = await chromium.launch({
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-blink-features=AutomationControlled'
+            ]
+        });
+
+        const context = await browser.newContext({
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            viewport: { width: 1920, height: 1080 },
+            locale: 'pt-BR'
+        });
+
+        const page = await context.newPage();
+
+        await page.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            window.chrome = { runtime: {} };
+        });
+
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(5000);
+
+        // Capturar screenshot
+        const screenshot = await page.screenshot({ type: 'png', fullPage: false });
+        const pageTitle = await page.title();
+        const finalUrl = page.url();
+        const html = await page.content();
+
+        await browser.close();
+
+        res.json({
+            success: true,
+            debug: {
+                pageTitle,
+                finalUrl,
+                htmlLength: html.length,
+                htmlPreview: html.substring(0, 2000),
+                screenshot: screenshot.toString('base64')
+            }
+        });
+
+    } catch (error) {
+        if (browser) await browser.close();
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Endpoint de teste (com auth)
 app.get('/test', authMiddleware, async (req, res) => {
     const testUrl = 'https://www.aliexpress.com/item/1005006123456789.html';
