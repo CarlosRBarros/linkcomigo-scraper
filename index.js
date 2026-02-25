@@ -36,42 +36,70 @@ app.post('/scrape', authMiddleware, async (req, res) => {
     let browser = null;
 
     try {
+        // Usar channel 'chrome' para melhor compatibilidade anti-bot
         browser = await chromium.launch({
             headless: true,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-gpu'
+                '--disable-gpu',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-infobars',
+                '--window-size=1920,1080'
             ]
         });
 
         const context = await browser.newContext({
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            viewport: { width: 1280, height: 720 },
-            locale: 'pt-BR'
+            viewport: { width: 1920, height: 1080 },
+            locale: 'pt-BR',
+            timezoneId: 'America/Sao_Paulo',
+            geolocation: { latitude: -23.5505, longitude: -46.6333 },
+            permissions: ['geolocation']
         });
 
         const page = await context.newPage();
+
+        // Mascarar detecção de webdriver/automation
+        await page.addInitScript(() => {
+            // Remover propriedades que denunciam automação
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+
+            // Simular chrome runtime
+            window.chrome = { runtime: {} };
+
+            // Override permissions query
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+        });
 
         // Timeout de 30 segundos
         page.setDefaultTimeout(30000);
 
         await page.goto(url, {
-            waitUntil: 'networkidle',
+            waitUntil: 'domcontentloaded',
             timeout: 30000
         });
 
         // Aguardar o conteúdo carregar (SPAs como AliExpress precisam de mais tempo)
-        await page.waitForTimeout(5000);
+        await page.waitForTimeout(8000);
 
         // Scroll para forçar lazy loading de imagens
-        await page.evaluate(() => window.scrollTo(0, 300));
-        await page.waitForTimeout(1000);
+        await page.evaluate(() => window.scrollTo(0, 500));
+        await page.waitForTimeout(2000);
 
-        // Debug: log do título da página
+        // Debug: log do título da página e URL final
         const pageTitle = await page.title();
+        const finalUrl = page.url();
         console.log(`[SCRAPER] Page title: ${pageTitle}`);
+        console.log(`[SCRAPER] Final URL: ${finalUrl}`);
 
         // Extrair metadados
         const metadata = await page.evaluate(() => {
